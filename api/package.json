@@ -2,8 +2,8 @@
   "name": "stratus",
   "version": "1.0.0",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "start": "node api.js",
+    "dev": "node --watch api.js"
   },
   "dependencies": {
     "altcha-lib": "^2.2.0",
