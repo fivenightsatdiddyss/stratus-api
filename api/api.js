@@ -9,11 +9,11 @@ const chalk = require("chalk");
 
 if (!globalThis.crypto) globalThis.crypto = require("crypto").webcrypto;
 
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 let sites;
 try {
-  sites = JSON.parse(readFileSync("sites.json", "utf-8"));
+  sites = JSON.parse(readFileSync(path.join(__dirname, "sites.json"), "utf-8"));
 } catch (e) {
   console.error("Failed to load sites.json:", e);
   process.exit(1);
