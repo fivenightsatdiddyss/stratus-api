@@ -32,6 +32,98 @@ const MAIL_HOST = process.env.MALQ_HOST || "http://127.0.0.1:4400";
 const VERIFY_TIMEOUT_MS = 45_000; // total budget for the code to arrive
 const VERIFY_POLL_INTERVAL_MS = 2_000;
 
+// Domains raccoongame still accepts (probed 2026-09-27). Override with
+// MALQ_ALLOWED_DOMAINS env (comma-separated); set it to "," to disable the
+// filter. Domains that answered anything other than a clean 200 (e.g. "The
+// email domain cannot receive email") were left out — those inboxes never
+// receive the code, which is the exact dead-inbox case this avoids.
+const ACCEPTED_MAIL_DOMAINS = new Set(
+  (process.env.MALQ_ALLOWED_DOMAINS || "0984764670ann.top,13teams.com,17666688.shop,1secmail.asia,1vpn.net,1weq.indevs.in,282mail.com,2fagmail.com,2famail.com,2fanote.com," +
+      "2faqq.com,2faus.com,2mail.store,2thth.com,442587.xyz,5fa.live,69i.shop,88mail.sbs,88mail.space,91az.net," +
+      "965.tmmad.com,aa55lamvinhkangzzzz.shop,aaa45longcakiazzzz.shop,aaa53nhanmaizzzz.com,aaaa879hangphongnizzzz.shop,aaakimanhcpfzz5zzz.shop,aaalamvinhanzzzz.shop,aaatranngochafczzzz.com,aauu.space,abematv.com," +
+      "abematv.net,abematv.org,abjmail.sbs,abusultanvip.com,aceh.cc,addyson.space,adenofscamaccounts.health,adid.name.ng,admin.thanhori.click,agp.edu.pl," +
+      "aihay.indevs.in,aiie.site,aistudioo.indevs.in,aksngmail.com,altaddress.com,altaddress.net,altaddress.org,ameliekovacek3.top,annnek.dpdns.org,annnek.indevs.in," +
+      "annnekkk.dpdns.org,annnekkk.indevs.in,annnekkk.me,antdev.org,antipx.com,antjv.cc7.name.ng,app42.cc1.name.ng,app55.cc1.name.ng,apponi.site,apptool.indevs.in," +
+      "apricity.tech,aquaflask.click,asdw.indevs.in,asfsadf2.pro,asia.1maill.com,asia.5secmail.com,asia.banglatip.com,asna.name.ng,astrixion.co.uk,astrixion.online," +
+      "astrixion.store,atica.edus.edu.pl,avelixmail.pro,ayna.fun,azpopmail.com,ballerstreat.com,bangkabelitung.net,banq7.online,batchofgames.store,batchoftools.store," +
+      "bayern.tokyo,bccto.cc,bd.1maill.com,bd.5secmail.com,beautystoremax.com,bedieusociu.tech,beeinbox.com,beeinbox.edu.pl,beeinbox.shop,beeinbox.space," +
+      "bemh.zihiv.app,berlin.edus.edu.pl,bhsmail.online,bobmails.xyz,bokachoda.pro,bosv.poj.me,bozuyv.cc15.name.ng,bpl.ovh,bradyvalentin.top,brawlz.io," +
+      "brewvn.com,brewvn.tokenized.name,brikanto.co.uk,brodilla.email,bszvq.enpy.me,burlingamezzz12.shop,businessfb.my.id,bygg.gvffm.app,byrur.cc7.name.ng,bzus.name.ng," +
+      "cail.shop,camp.unibiz.edu.pl,campus.agp.edu.pl,canicasbrawl.com,careplusmedical.io.vn,castcross.com,cbdtfe.cc19.name.ng,cc13.name.ng,cc14.name.ng,cc7.name.ng," +
+      "ccdeveloper.online,cctruyen.com,cfle.zolud.app,cfqs.name.ng,cheapluxury.dpdns.org,cheapluxury.indevs.in,cheapluxurymail.xyz,cheappoor.dpdns.org,chengge996.tech,chiasemienphi.indevs.in," +
+      "chinasteel.xyz,chinpomail.com,chio-online.us.com,chowordpress.biz.id,chtsv.store,cmail.asia,codeviet.store,coding.publicvm.com,coffeechill.bond,coheuk.cc16.name.ng," +
+      "community.tokenized.name,communitymmo.tokyo,congngheso.cyou,contact.edus.edu.pl,corpmail.club,cqxkcp.cc14.name.ng,creatorsagi.site,cronus.works,crush.web.id,cupang.tech," +
+      "cursormoi.me,cursormoi.tech,cutiesgirlontheworld.indevs.in,cyclop.live,daddy.larping.agency,dailynewsdomain.com,dailypolicywatch.com,dasf.name.ng,dauv.name.ng,dbea.autos," +
+      "ddzv.name.ng,deall.store,deislerlive.com,dev.semar.edu.pl,devlogtech.web.id,devvnapi.qzz.io,dfly.name.ng,dful.name.ng,dichvu.linkpc.net,diddybld.shop," +
+      "diddyblud.shop,diddybluds.shop,diendanit.tokenized.name,diendanviet.sryze.cc,digitalcorevn.biz.id,disbs.com,disefl.com,disposemail.space,dnbp.hair,doestech.web.id," +
+      "domainmoi.me,domainmoi.tech,domsr.fun,doro.name.ng,dowjones.com.se,dpl.ovh,dple.top,dqrx.name.ng,dramapendek.info,dramapendek.online," +
+      "dropinbox.space,dryddtyioo.com,dtvj.name.ng,dua.unibiz.edu.pl,duanhqu7t1.top,dublin.edus.edu.pl,dulichviet.biz.id,dyb.delot.dev,dyql.zolud.app,easyme.pro," +
+      "edging.life,edubaby.indevs.in,edugpt.bond,eduhust.online,eduinfo.indevs.in,edunews.indevs.in,edus.edu.pl,eeei.shop,eeii.store,eemail.shop," +
+      "eemail.space,efemeral.tech,efhyo.cc7.name.ng,eisenlog.com,eko.unibiz.edu.pl,elitehealthmedicalcoms.net,email.unibiz.edu.pl,email4.in,emailab.xyz,emailpenting.my.id," +
+      "emails.garden,emailxo.pro,epiphanies.app,epmtyfl.me,epuf.name.ng,eqpv.name.ng,eros.email,esscpay.com,eu.arctophilei.com,exolinker.com," +
+      "exvp.top,exvpn.top,ezvpn.top,faceb00kmail.com,faircapride.com,faka99.cc,fbmf.zolud.app,fbvby.qqv.me,femboy.foundation,ferrite-core.tech," +
+      "floordesignbot.com,fmail.men,freeclaudemythos.cfd,freemail.is,frto.name.ng,fs6.baby,fshare.dpdns.org,funtechme.me,fx-brokers.review,gamene.online," +
+      "gay.gayfuckers.com,gcl.matthewer.biz.id,genhz.cc7.name.ng,getnada.email,getnada.net,ggtm.4op.me,ghhj.name.ng,giangtiemruoi.tech,gieaxa.cc20.name.ng,gigabyte.unibiz.edu.pl," +
+      "gmail.com,gmailll.bond,gmreeeddd.com,go4vpn.top,godt.suve.me,gomax2025.com,gootsijs.com,granita.me,groundtips.com,gsiz.name.ng," +
+      "gtgidhi.com,gtiu.zolud.app,guns.lat,gurame.tech,h4nabi.online,hacktivc.com,hals.greda.app,hanabi.indevs.in,hanabi.qzz.io,happyteethclinic.io.vn," +
+      "harvenkiori.com,harynews.com,hateri122.shop,haymail.cyou,heartmula.online,heartpointmedical.com,hegavm.cc19.name.ng,henshou.me,heroclash.info,heromy.indevs.in," +
+      "hforz.loks.app,hgoas.cc7.name.ng,hhhcc.online,hhhi.site,hidefrom.us,hidemymail.fr,hiii.site,hnua.zihiv.app,hotkeystech.biz.id,houlaxi.io.vn," +
+      "hrmukv.cc20.name.ng,hueandue.io.vn,hust.edu.pl,huy.onlinee.cyou,huyanh05.name.vn,huyendieu.tech,hyikle.cc19.name.ng,i-dont-even-know-the-limit-of-domain-how-long-does-this-goooooo.space,id.edus.edu.pl,id.semar.edu.pl," +
+      "ifqvmk.cc15.name.ng,iijj.site,iilu.site,ilyy.org,imissthatkindofmisery.com,in.1maill.com,in.5secmail.com,inbo.email,inboxin.email,infoaboutme.info," +
+      "infome.indevs.in,intrarmour.com,inveromail.info,iokvq.bluy.me,iphone17pro.indevs.in,ipiso.tmmad.com,iplv.ovh,iqpill.online,isklex.cc19.name.ng,itzlc.zotet.app," +
+      "izcn.name.ng,jaii.shop,jawatengah.net,jawatimur.net,jkb.tmmad.com,jkd.tmmad.com,johnmail.site,just4junk.com,k20pro.indevs.in,kaii.store," +
+      "kalimantantimur.net,kapalapi.tech,kdau.bghgp.app,keepdev.me,kent.edus.edu.pl,khaku.indevs.in,khangdino.com,khoviaads.cyou,kimuko12334zzz.shop,kkmail.shop," +
+      "kojoball.email,kokomail.cc,kooi.shop,kpl.ovh,kshcid.com,kurmandika.de,kuruptd.ink,kya2.com,kythuatso.fun,kzwh.zihiv.app," +
+      "lab.agp.edu.pl,lamenteesmaravillosa.us.com,lanixus.us,lansd.org,layueming.pics,leonard.tattoo,lhadk11.pro,lhte.gvffm.app,lifespringhealth.io.vn,lifetalk.us," +
+      "liix.zibon.app,limemail.biz,linkvp.top,linkvpn.top,linqmail.com,liscensekey.io.vn,livebuylocal.com,llnq.org,login.edus.edu.pl,login.securamail.org," +
+      "lostsaga.me,lotari.top,lottery-sambad.site,lplso.tmmad.com,luciane.store,luciane.xyz,lumie.indevs.in,lumiere.indevs.in,luvmiumak.xyz,luxury345.com," +
+      "lymiddleeast.com,lzyb.bgfrl.app,mail-temp.info,mail-temp.pro,mail-temp.shop,mail.5fa.live,mail.nguyendoll.com,mail.shouyou789.com,mail.toolwiz.id,mailbanvia.com," +
+      "mailbanvia.net,mailbavl.com,mailbox.ma,mailcltm.com,maild.site,maildm.net,mailf.site,mailforspams.com,mailhiha.com,mailhihi.com," +
+      "mailio.site,mailiot.net,maillive247.bond,mailmmo.eu.cc,mailmmo.io.vn,mailmomy.com,mailn.site,mailp.site,mailregcl.com,mailshield.org," +
+      "mailtelig.site,mailuio.com,mailus.app,manikaraza.shop,mariathecuties.indevs.in,marimas.works,mavobox.com,mbmz31.pro,mbox.to,mcxhung.2bd.net," +
+      "mcxhung.jo3.org,mcxhung.linkpc.net,mcxhung.lol,mcxhung.nett.to,mcxhung.publicvm.com,mcxhung.run.place,mcxhung.work.gd,mcxhung.zone.id,melorvian.com,membermail.net," +
+      "metaimail.com,mialvinkimg.asia,micky.biz.id,mienbacnd.online,miffymail.org,miii.site,minee.space,mingyuekeji.online,mingyueming.click,mingyueming.shop," +
+      "mingyukeji.lol,minh1.idhmz.io.vn,minhdeptrai.tech,minhne.me,minhphan.tech,minhphanez.me,minhphanshop.me,mixozia.com,mmo.dpdns.org,mogging.life," +
+      "mogging.lol,moifreefire.me,moifreefire.tech,mongchieuxuan.click,montecarlo.pw,mrax.bgfrl.app,mwlp.skin,mxl001.win,mxmm.hair,my.cleantempmail.com," +
+      "mychange.blog,myfollow.pics,myinfo.indevs.in,mypass.best,mysummary.shop,naii.fun,nam2002.site,namkhanh61.com,namkhanh61.net,nano-watt.tech," +
+      "nbzy.hair,newtonius.net,nfyda.bluy.me,ng.5secmail.com,nghiendesigner.store,nguyenbaoanh94750.click,nguyendoll.com,nian.anhnhan.fun,nivoramail.pro,nnqk.bghgp.app," +
+      "nnskid.shop,noemi.co.com,nora.indevs.in,novasmiledentalclinic.io.vn,noviqmail.pro,nrpwu.bluy.me,ntdservice.store,nuoitoi.indevs.in,nuoitoi.online,nutrisari.me," +
+      "nutye.bond,obee.info,oeralb.com,office365.biz.id,oije.online,ok.wiki,okadk.pro,okmax2025.com,okymail.site,okyre.com," +
+      "olvn.zolud.app,olyanfood.com,omail.asia,omail.store,omgmax2025.com,oneon.site,ongvo.com,onlinee.cyou,oooi.fun,openaidontbanme.jp," +
+      "openstudy.edu.pl,oryvomail.pro,otheremail.org,ougoods.com,ourisp.net,paich.art,pehol.com,perimeter-x.com,periole.com,phons.online," +
+      "pimail.space,pivot-gear.store,pkmail.site,plimbox.com,plupmail.com,plus.unibiz.edu.pl,pmail.asia,police.pet,prembos.online,priyomail.site," +
+      "priyop.top,priyor.biz,priyor.top,priyotv.one,pro1.indevs.in,proid.cloud-ip.cc,promptlibrary.bond,protect.support,protvpn.top,prozonetools.com," +
+      "ptruyen.com,purespace.design,pwyqd.enpy.me,quangnguyenmmo.io.vn,quangveo3top1zzz12.shop,quick1vpn.top,quickvp.top,rgzx.tmmad.com,riau.net,riuxi.floy.me," +
+      "rome.edus.edu.pl,rqpqmt.cc15.name.ng,rrmail.online,rtx.dekiv.app,rujinews.com,rupni.name.ng,ruuv.zolud.app,rwzo.bhbjm.app,ryzgx.enpy.me,safehouse.quest," +
+      "safevp.top,salmonela.me,salz.unibiz.edu.pl,sanpham.bond,sanpham.cyou,sanphamvn.store,sbrd.suve.me,securamail.org,secure.unibiz.edu.pl,semar.edu.pl," +
+      "seokey.org,seotop.web.id,seuuo.com,sevril.win,sgmo.top,shieldvp.top,shoptoolhp.site,sisood.com,skiamazing.com,snapinbox.space," +
+      "snepsmail.click,soma.edu.pl,sovv.bghgp.app,spamzero.net,spark.christmas,sptech.io.vn,sqau.zibon.app,sqgm.suve.me,sszlamvinhkangzz5zz.shop,stackfl.site," +
+      "stelvano.co.uk,student.edus.edu.pl,student.semar.edu.pl,student.unibiz.edu.pl,studentnews.indevs.in,studentx.me,subview.click,sulawesiselatan.net,sumaterabarat.net,sumaterautara.net," +
+      "superbee.my,surgerm.com,synapse-core.online,szmyv.zotet.app,t-mail.asia,taifsoft.com,taikhoanpro.tech,taikhoanprovip.tech,taikhoanstore.tech,taikhoanvip.me," +
+      "taikhoanvip.tech,tailoredin.com,takeset.shop,taphoatainguyen.cyou,tdkoa.bluy.me,teacher.edus.edu.pl,teacher.semar.edu.pl,teacher.unibiz.edu.pl,teajus.me,teamangel.mom," +
+      "teamdev.work.gd,techernews.indevs.in,teliemail.site,tempmail.ai,tempmail.click,tempmail.tokenized.name,tempmailapi.io.vn,tempmailmmo.co.uk,tempmailmmo.com,tempmailonline.co," +
+      "tempmails24.com,tempmailt.com,tempmailvip.cyou,temporary-mail.paicha.cloud,temporarymail.fr,temptomail.org,thiencobattu.io.vn,thietke3d.website,throbbingdick.love,timail.site," +
+      "tksieure.tech,tksiure.me,tmail.ma,tmre.site,tnmmail.com,tomboy.best,tomboy.live,toolkitmmo.com,toolsmail.me,toplearning.site," +
+      "touaxin.com,tplo.top,tpoaw.loks.app,traili-is-a-skid.xyz,trialservices.cloud,tsby.bgyjk.app,tumoroxa.shop,ulmerso.com,umail.asia,un.unibiz.edu.pl," +
+      "uncmail.org,unibiz.edu.pl,university.unibiz.edu.pl,unljc.qqv.me,up.agp.edu.pl,upov.zihiv.app,urban-folly.store,usacademy.web.id,usmail.my.id,ussteel.xyz," +
+      "uwdo.zolud.app,uwvcuy.cc20.name.ng,valentrixorsystems.co.uk,valentrixorsystems.store,vanish.wtf,velonarix.com,venkat.biz,venkat.pics,vercel.buzz,verify.securamail.org," +
+      "vibecodingmmo.com,vietcoder.tokenized.name,villatogel.com,vipcs.store,vllalo.pro,vlog1.top,vlogtop.top,vngzvg.cc19.name.ng,vpaccess.top,vpack.top," +
+      "vpass1.top,vpath.top,vpclick1.top,vpfast.top,vpkey.top,vplink.top,vplog1.top,vpn4fast.top,vpnclick.top,vpncon.top," +
+      "vpnex.top,vpnhub.top,vpnin.top,vpnkey.top,vpnkey1.top,vpnkeyz.top,vpnlive.top,vpnlock.top,vpnlog.top,vpnmax.top," +
+      "vpnow.top,vpnow1.top,vpnpass.top,vpnpath.top,vpnport.top,vpnrocket.top,vpnsafe.top,vpnshort.top,vpnshot.top,vpnsnap.top," +
+      "vpnstack.top,vpnsurf.top,vpnto.top,vpnup.top,vpnup1.top,vpnwayz.top,vpnzest.top,vpquick.top,vpquick1.top,vprocket.top," +
+      "vpsafe1.top,vpset.top,vpteam.top,vvkku.com,vvv42phongnhan96aaaa.shop,vwh.sh,vzap.top,warmeta.net,waterlemon.indevs.in,watson.lat," +
+      "wavetura.co.uk,wawo.zolud.app,wazbox.com,wealthbestway.com,web.securamail.org,webmail.unibiz.edu.pl,wellpointmedical.io.vn,wingmer.com,wnqt.poj.me,wordpressvn.space," +
+      "work.unibiz.edu.pl,workspacevn.indevs.in,wvtp.zolud.app,x866.cc,xdanae.com,xhxveh.cc15.name.ng,xmz1.net,xn--80aabqk5atp.com,xnxjdjd.com,xuti.crev.me," +
+      "xwdf.zolud.app,yadvt.qqv.me,yamakawateruki.jp,yamakawateruki.net,yaoiland.io.vn,yasdsgar.com,yeahmax2025.com,yilo.zihiv.app,yoyosheeh.online,z4keys.top," +
+      "zakumaka.shop,zenthoriqindustries.com,zenthoriqindustries.org,zonkbox.com,zynario.pro,zz51zlamvinhkangzz54zz.shop,zz5zlamvinhanzz5zz.shop,zz9zzz3zzwwwoo.shop,zztokudayukamizzaz123zaza.shop,zzveo3quangtop98.shop," +
+      "zzzalamvinhkang44zz.shop,zzzbakana666.shop,zzzi.space,zzzkamicod32azike12.shop,zzzkutaradazatop7.shop,zzzkutaradazatop77.shop,zzzquangveo3top100zz.shop,zzzz544lamsangmaizzzz.shop,zzzzkumazanawwntara123.shop,zzzzquangveo123top2.shop," +
+      "zzzkutaradazatop77.shop,zzzquangveo3top100zz.shop,zzzz544lamsangmaizzzz.shop,zzzzkumazanawwntara123.shop,zzzzquangveo123top2.shop,zzzzquangveo36789top5.shop,zzzzukamitokuda12.shop,zzzzzhangphongnizzzz.shop,zzzzzkumuuuu12.shop,zzzzztuananhnamzzzz.shop")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean),
+);
+
 async function resolveRaccoonIp() {
   if (raccoonIpCache && raccoonIpCache.expiresAt > Date.now())
     return raccoonIpCache;
@@ -219,15 +311,46 @@ async function createAccountRaw() {
   // 1) Ask malq for a disposable inbox. malq picks a random provider per
   //    session (~40 of them) — that rotation is what keeps this resilient
   //    now that raccoongame blocks individual temp-mail domains.
-  const sessionRes = await fetchWithTimeout(
+  let sessionRes = await fetchWithTimeout(
     `${MAIL_HOST}/api/v1/session`,
     {},
     15_000,
   );
-  const mailSession = await sessionRes.json().catch(() => null);
-  const email = mailSession?.address;
-  const mailToken = mailSession?.token;
+  let mailSession = await sessionRes.json().catch(() => null);
+  let email = mailSession?.address;
+  let mailToken = mailSession?.token;
   if (!email || !mailToken) throw new Error("malq returned no session");
+
+  // 1b) raccoon's blocklist keeps growing and malq hands out a RANDOM
+  //     provider per session, so many sessions now land on blocked domains
+  //     and burn attempts. Resample (up to 8×, 250ms apart) until the
+  //     session's domain is on the accepted list; if none of the 8 is, keep
+  //     the LAST session anyway — the sendEmail fail-fast below still
+  //     rejects newly-blocked domains and the outer retry rotates again.
+  for (let tries = 0; tries < 8; tries++) {
+    const domain = (email.split("@")[1] || "").toLowerCase();
+    if (ACCEPTED_MAIL_DOMAINS.size === 0 || ACCEPTED_MAIL_DOMAINS.has(domain))
+      break;
+    logSys(
+      chalk.gray(
+        `mail: ${domain} not on accepted list — resampling (${tries + 1}/8)`,
+      ),
+    );
+    await new Promise((r) => setTimeout(r, 250));
+    try {
+      sessionRes = await fetchWithTimeout(
+        `${MAIL_HOST}/api/v1/session`,
+        {},
+        15_000,
+      );
+      mailSession = await sessionRes.json().catch(() => null);
+      if (mailSession?.address && mailSession?.token) {
+        email = mailSession.address;
+        mailToken = mailSession.token;
+      }
+    } catch {}
+  }
+  logSys(chalk.gray(`mail: using ${email.split("@")[1] || "?"}`));
 
   const raccoonPassword = generatePassword();
   const sn = generateSN();
