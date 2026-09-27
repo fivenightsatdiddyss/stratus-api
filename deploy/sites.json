@@ -1,0 +1,16 @@
+{
+  "sites": {
+    "main": {
+      "api_key": "sk_live_jakob52_cloud",
+      "enabled": true,
+      "max_concurrent_sessions": 999,
+      "max_session_seconds": 900,
+      "limits": {
+        "per_minute": 999,
+        "per_hour": 999,
+        "per_day": 999,
+        "per_month": 999
+      }
+    }
+  }
+}

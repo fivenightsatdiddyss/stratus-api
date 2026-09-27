@@ -1,0 +1,164 @@
+console.log('[malq] init');
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+import Elysia from 'elysia';
+
+import Domains from './util/Domains';
+
+import { demoApp, demoTokens } from './demo.ts';
+
+import type { ProviderImpl } from './providers/Provider';
+
+const providerDir = path.join(import.meta.dirname, 'providers', 'impl');
+const providerFiles = fs.readdirSync(providerDir).filter((file) => file.endsWith('.ts') || file.endsWith('.js'));
+const providerSubdirs = fs.readdirSync(providerDir).filter((file) => fs.statSync(path.join(providerDir, file)).isDirectory());
+
+for (const subdir of providerSubdirs) {
+    const subdirPath = path.join(providerDir, subdir);
+    const subdirFiles = fs.readdirSync(subdirPath).filter((file) => file.endsWith('.ts') || file.endsWith('.js'));
+    for (const file of subdirFiles) providerFiles.push(path.join(subdir, file));
+}
+
+const providers: Map<string, { new(): ProviderImpl }> = new Map();
+
+for (const providerFile of providerFiles) {
+    if (providerFile.includes('_')) continue;
+
+    const providerPath = path.join(providerDir, providerFile);
+    const providerModule = await import(providerPath);
+    providers.set(providerFile.replace('.ts', ''), providerModule.default);
+}
+
+console.log(`[malq] identified ${providers.size} providers`);
+
+let checkedProviders: string[] = [];
+let progressInterval = setInterval(() => {
+    console.log([
+        '[malq] fetching domains...',
+        `(${checkedProviders.length}/${providers.size})`,
+        ((providers.size - checkedProviders.length) <= 3) && `- pend. ${providers.keys().filter(e => !checkedProviders.includes(e)).toArray().join(', ')}`
+    ].filter(e => e).join(' '));
+}, 1067);
+
+await Promise.all(Array.from(providers).map(async ([name, Provider]) => {
+    try {
+        const p = new Provider();
+        const d = await p.getDomains();
+        Domains.set(p.constructor.name, d);
+    } catch (e) {
+        console.error(`[malq] domain fetching for "${name}" encountered an error`, e);
+        console.error(`[malq] the provider will not be used this launch`);
+    } finally {
+        checkedProviders.push(name);
+    }
+}));
+
+clearInterval(progressInterval);
+
+const lastNameReq = await fetch('https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Usernames/Names/familynames-usa-top1000.txt');
+const lastNameRes = await lastNameReq.text();
+const lastNameList = lastNameRes.toLowerCase().split('\n').map(n => n.trim()).filter(n => n.length > 0);
+
+const firstNameReq = await fetch('https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Usernames/Names/malenames-usa-top1000.txt');
+const firstNameRes = await firstNameReq.text();
+const firstNameList = firstNameRes.toLowerCase().split('\n').map(n => n.trim()).filter(n => n.length > 0);
+
+const getRandomName = () => {
+    const firstName = firstNameList[Math.floor(Math.random() * firstNameList.length)];
+    const lastName = lastNameList[Math.floor(Math.random() * lastNameList.length)];
+    return firstName + Math.random().toString(36).slice(2, 5) + lastName;
+};
+
+console.log('[malq] name dictionary init');
+
+const app = new Elysia();
+
+const sessions = new Map<string, ProviderImpl>();
+
+const indexPath = path.join(import.meta.dirname, 'app', 'index.html');
+const indexContent = fs.readFileSync(indexPath, 'utf-8');
+const templatedIndex = indexContent.replace('{NUM_PROVIDERS}', providers.size.toString());
+const servedIndex = Bun.env.DEMO_ENABLED ? templatedIndex : templatedIndex.replace(/<demo>[\s\S]*?<\/demo>/g, '');
+
+app.get('/', () => new Response(servedIndex.replace('{DATE}', Date.now().toString()), { headers: { 'Content-Type': 'text/html' } }));
+app.get('/robots.txt', () => new Response(fs.createReadStream(path.join(import.meta.dirname, 'app', 'robots.txt')), { headers: { 'Content-Type': 'text/plain' } }));
+app.get('/manifest.json', () => new Response(fs.createReadStream(path.join(import.meta.dirname, 'app', 'manifest.json')), { headers: { 'Content-Type': 'application/json' } }));
+app.get('/sitemap.xml', () => new Response(fs.createReadStream(path.join(import.meta.dirname, 'app', 'sitemap.xml')), { headers: { 'Content-Type': 'application/xml' } }));
+app.get('/favicon.ico', () => new Response(fs.createReadStream(path.join(import.meta.dirname, 'app', 'icons', '32.png')), { headers: { 'Content-Type': 'image/png' } }));
+
+const iconPath = path.join(import.meta.dirname, 'app', 'icons');
+
+fs.readdirSync(iconPath).forEach((iconFile) => {
+    if (iconFile.endsWith('.png'))
+        app.get(`/icons/${iconFile}`, () => new Response(fs.createReadStream(path.join(iconPath, iconFile)), { headers: { 'Content-Type': 'image/png' } }));
+});
+
+app.get('/api/v1/session', async ({ query, server, request }) => {
+    if (Bun.env.DEMO_ENABLED) {
+        const token = query.token;
+        if (!token) return new Response(JSON.stringify({ error: 'missing demo token; see /demo' }), { status: 401 });
+
+        const entry = demoTokens.get(token);
+        const clientIP = Bun.hash.xxHash3(server!.requestIP(request)?.address || '');
+
+        if (!entry) return new Response(JSON.stringify({ error: 'invalid or expired demo challenge' }), { status: 401 });
+        if (entry.ip !== clientIP) return new Response(JSON.stringify({ error: 'demo IP mismatch' }), { status: 403 });
+        if (entry.expires < Date.now()) {
+            demoTokens.delete(token);
+            return new Response('Token expired', { status: 401 });
+        }
+        if (entry.remaining <= 0) return new Response(JSON.stringify({ error: 'demo token exhausted; generate a new one' }), { status: 403 });
+
+        entry.remaining--;
+        if (entry.remaining === 0) demoTokens.delete(token);
+    }
+
+    let provider: ProviderImpl;
+
+    if (query.provider && process.env.ALLOW_PROVIDER_SPECIFY === '1') {
+        const specifiedProvider = providers.get(query.provider);
+        if (!specifiedProvider) return new Response(JSON.stringify({ error: 'invalid provider specified' }), { status: 400 });
+        provider = new specifiedProvider();
+    } else {
+        const randomProvider = Array.from(providers.values())[Math.floor(Math.random() * providers.size)];
+        provider = new randomProvider();
+    }
+
+    const providerName = provider.constructor.name.replaceAll('$', '.');
+
+    try {
+        const randomDomain = Domains.getRandom(provider.constructor.name);
+        const address = `${getRandomName()}@${randomDomain}`;
+        const token = crypto.randomUUID();
+
+        await provider.createInbox(address);
+
+        sessions.set(token, provider);
+
+        setTimeout(() => sessions.delete(token), 2 * 60 * 1000);
+
+        return { address, token, provider: providerName };
+    } catch (e) {
+        console.error(e);
+        return new Response(JSON.stringify({ error: 'failed to get address from provider', provider: providerName }), { status: 500 });
+    }
+});
+
+app.get('/api/v1/inbox/:address', async ({ params }) => {
+    const token = params.address;
+    const provider = sessions.get(token);
+    if (!provider) return new Response(JSON.stringify({ error: 'invalid or expired session token' }), { status: 401 });
+
+    const mail = await provider.getMail(params.address);
+
+    return { address: params.address, mail };
+});
+
+if (Bun.env.DEMO_ENABLED) app.use(demoApp);
+
+app.listen(4400, () => {
+    console.log('[malq] on http://localhost:4400');
+    console.log(`[malq] proxy ${process.env.PROXY ? 'enabled ' : 'disabled [CAUTION]'}`);
+});

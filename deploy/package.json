@@ -1,0 +1,16 @@
+{
+  "name": "stratus-deploy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-contained Railway deployment: stratus cloud-gaming API + bundled malq temp-mail service",
+  "scripts": {
+    "build": "cd malq && ../node_modules/.bin/bun install",
+    "start": "bash start.sh"
+  },
+  "dependencies": {
+    "bun": "^1.2.19",
+    "chalk": "^4.1.2",
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  }
+}
