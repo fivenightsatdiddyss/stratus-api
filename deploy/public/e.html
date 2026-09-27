@@ -183,16 +183,22 @@
         let pc   = null;
         let _dc  = null;
         let sigWs = null;
+        let readyWatchdog = null;
+        let iceWatchdog   = null;
         function sigSend(obj) {
             if (sigWs && sigWs.readyState === WebSocket.OPEN) sigWs.send(JSON.stringify(obj));
         }
         async function setupWebRTC(iceServers, signaling_ws) {
             sigWs = new WebSocket(signaling_ws);
+            sigWs.onopen = () => {
+                readyWatchdog = setTimeout(() => showEnded(), 60000);
+            };
             sigWs.onmessage = async (e) => {
                 let msg;
                 try { msg = JSON.parse(e.data); } catch { return; }
                 switch (msg.type) {
                     case "game_ready":
+                        clearTimeout(readyWatchdog);
                         pc = new RTCPeerConnection({ iceServers });
                         pc.addTransceiver("audio", { direction: "recvonly" });
                         pc.addTransceiver("video", { direction: "recvonly" });
@@ -208,7 +214,7 @@
                         };
                         pc.oniceconnectionstatechange = () => {
                             const s = pc.iceConnectionState;
-                            if (s === "connected" || s === "completed") onLive();
+                            if (s === "connected" || s === "completed") { clearTimeout(iceWatchdog); onLive(); }
                             if (s === "failed") showEnded();
                         };
                         const offer = await pc.createOffer();
@@ -216,7 +222,14 @@
                         sigSend({ type: "rtc_offer", sdp: offer.sdp });
                         break;
                     case "rtc_answer":
-                        if (pc) pc.setRemoteDescription(new RTCSessionDescription(msg.sdp)).catch(() => {});
+                        if (pc) {
+                            pc.setRemoteDescription(new RTCSessionDescription(msg.sdp)).catch(() => {});
+                            clearTimeout(iceWatchdog);
+                            iceWatchdog = setTimeout(() => {
+                                const s = pc && pc.iceConnectionState;
+                                if (s !== "connected" && s !== "completed") showEnded();
+                            }, 90000);
+                        }
                         break;
                     case "rtc_candidate":
                         if (pc && msg.candidate) {
@@ -242,6 +255,8 @@
             }, { once: true });
         }
         function showEnded() {
+            clearTimeout(readyWatchdog);
+            clearTimeout(iceWatchdog);
             hideConnecting();
             streamEl.classList.remove("visible");
             stopAmbient();
@@ -446,7 +461,7 @@
             const host   = params.get('host');
             if (!id) return;
             try {
-                const res  = await fetch(`/api/cloud/embed-data?id=${encodeURIComponent(id)}`);
+                const res  = await fetch(`/cloud/v1/embed-data?id=${encodeURIComponent(id)}`);
                 const data = await res.json();
                 if (host && data.signaling_ws) {
                     data.signaling_ws = data.signaling_ws.replace(/wss?:\/\/[^/]+/, `wss://${host}`);

@@ -29,8 +29,8 @@ let raccoonIpCache = null;
 // account-creation flow. malq rotates across ~40 disposable-mail providers
 // instead, and runs on an internal port next to this API — never exposed.
 const MAIL_HOST = process.env.MALQ_HOST || "http://127.0.0.1:4400";
-const VERIFY_TIMEOUT_MS = 90_000; // total budget for the code to arrive
-const VERIFY_POLL_INTERVAL_MS = 3_000;
+const VERIFY_TIMEOUT_MS = 45_000; // total budget for the code to arrive
+const VERIFY_POLL_INTERVAL_MS = 2_000;
 
 async function resolveRaccoonIp() {
   if (raccoonIpCache && raccoonIpCache.expiresAt > Date.now())
@@ -326,14 +326,27 @@ async function doInitGame(session) {
     user_token: token,
   };
 
-  await raccoonFetch("/userGame/checkCost", {
+  // raccoon's edge intermittently drops the connection with a bare
+  // "fetch failed"; one quick retry recovers the requesting_game phase
+  // instead of killing the whole session.
+  const raccoonFetchRetry = async (pathAndQuery, opts) => {
+    try {
+      return await raccoonFetch(pathAndQuery, opts);
+    } catch (e) {
+      if (!/fetch failed/i.test(e?.message)) throw e;
+      await new Promise((r) => setTimeout(r, 1_500));
+      return raccoonFetch(pathAndQuery, opts);
+    }
+  };
+
+  await raccoonFetchRetry("/userGame/checkCost", {
     method: "POST",
     headers: h,
     body: new URLSearchParams({ ...common, game_key }),
   });
 
   const playData = await (
-    await raccoonFetch("/jyapi/playGame", {
+    await raccoonFetchRetry("/jyapi/playGame", {
       method: "POST",
       headers: h,
       body: new URLSearchParams({
@@ -409,7 +422,10 @@ async function doClaimGame(session, queue_id) {
       }),
     })
   ).json();
-  if (d.status === 200 && d.data?.result) return decryptPayload(d.data.result);
+  // raccoon sometimes answers 201 (Created) on a successful claim — any
+  // 2xx body status with a result payload is a success, not just 200.
+  if (d.status >= 200 && d.status < 300 && d.data?.result)
+    return decryptPayload(d.data.result);
   throw new Error(`Failed to claim game. API Status: ${d.status}`);
 }
 
@@ -681,7 +697,16 @@ function connectRaccoonSignaling(session) {
   };
   const toClient = (data) => {
     const cws = session.clientWs;
-    if (cws?.readyState === WebSocket.OPEN) cws.send(JSON.stringify(data));
+    if (cws?.readyState === WebSocket.OPEN) {
+      cws.send(JSON.stringify(data));
+      return;
+    }
+    // Browser WS not attached yet (raccoon's start_game ack routinely
+    // beats the client's connect). Buffer instead of dropping — otherwise
+    // game_ready is lost and the embed player hangs on "Connecting".
+    session.pendingClientMsgs.push(JSON.stringify(data));
+    if (session.pendingClientMsgs.length > 50)
+      session.pendingClientMsgs.shift();
   };
 
   raccoonWs.on("open", () => {
@@ -802,26 +827,29 @@ app.get("/cloud/v1/embed", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "e.html"));
 });
 
-app.get("/cloud/v1/embed-data", (req, res) => {
-  const ip = getClientIp(req);
-  if (!checkIpLimit(embedIpLimits, ip, 60_000, 30)) {
-    return res.status(429).json({ error: "Too many requests. Slow down." });
-  }
+app.get(
+  ["/cloud/v1/embed-data", "/api/cloud/embed-data"],
+  function handleEmbedData(req, res) {
+    const ip = getClientIp(req);
+    if (!checkIpLimit(embedIpLimits, ip, 60_000, 30)) {
+      return res.status(429).json({ error: "Too many requests. Slow down." });
+    }
 
-  const { id } = req.query;
-  if (!id) return res.status(400).json({ error: "Missing id." });
+    const { id } = req.query;
+    if (!id) return res.status(400).json({ error: "Missing id." });
 
-  const session = sessions.get(id);
-  if (!session)
-    return res.status(404).json({ error: "Session not found or expired." });
-  if (session.state !== "active")
-    return res.status(400).json({ error: "Session not yet active." });
+    const session = sessions.get(id);
+    if (!session)
+      return res.status(404).json({ error: "Session not found or expired." });
+    if (session.state !== "active")
+      return res.status(400).json({ error: "Session not yet active." });
 
-  res.json({
-    ice_servers: session.embed_ice_servers,
-    signaling_ws: session.embed_signaling_ws,
-  });
-});
+    res.json({
+      ice_servers: session.embed_ice_servers,
+      signaling_ws: session.embed_signaling_ws,
+    });
+  },
+);
 
 app.post("/cloud/v1/createSession", auth, async (req, res) => {
   const { game_key } = req.body;
@@ -878,6 +906,7 @@ app.post("/cloud/v1/createSession", auth, async (req, res) => {
     raccoonWs: null,
     raccoonPingInterval: null,
     clientWs: null,
+    pendingClientMsgs: [],
     costInterval: null,
   };
   sessions.set(uuid, session);
@@ -1142,6 +1171,13 @@ httpServer.on("upgrade", (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, (ws) => {
     session.clientWs = ws;
 
+    // Flush anything raccoon pushed before the browser got here
+    // (game_ready/rtc_answer/early candidates) — order preserved.
+    if (session.pendingClientMsgs && session.pendingClientMsgs.length) {
+      for (const buffered of session.pendingClientMsgs) ws.send(buffered);
+      session.pendingClientMsgs = [];
+    }
+
     ws.on("message", (raw) => {
       let msg;
       try {
@@ -1163,12 +1199,18 @@ httpServer.on("upgrade", (req, socket, head) => {
           }),
         );
       } else if (msg.type === "rtc_candidate" && msg.candidate) {
+        // Browsers send RTCIceCandidateInit objects (candidate.toJSON());
+        // raccoon's inbound candidates are plain SDP strings.
+        const cand =
+          typeof msg.candidate === "string"
+            ? msg.candidate
+            : msg.candidate.candidate || JSON.stringify(msg.candidate);
         rws.send(
           JSON.stringify({
             id: "rtc_sdp",
             from: session.sn,
             to: session.gl_key,
-            body: { type: "candidate", sdp: msg.candidate },
+            body: { type: "candidate", sdp: cand },
           }),
         );
       }
@@ -1235,5 +1277,11 @@ httpServer.listen(PORT, () => {
         : "malq NOT ready after 3min — accounts will be created on demand",
     );
     fillPool().catch(() => {});
+    // Serve-time refills only fire when a session consumes an account, so
+    // an idle instance would otherwise stay drained forever. Top the pool
+    // back up on a timer too.
+    setInterval(() => {
+      if (!poolFilling) fillPool();
+    }, 60_000).unref?.();
   })();
 });
